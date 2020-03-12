@@ -1,5 +1,7 @@
 # Tracking the Growth of COVID-19 Cases
 
+**Update: The data updating has been paused as of March 10 because of quality issues with the data source. I will continue updating this once these issues are resolved or I have a more reliable source of data.**
+
 The purpose of [this notebook](https://github.com/aatishb/covid/blob/master/curvefit.ipynb) is to infer the rate at which confirmed cases of COVID-19 are growing (or were growing) in various countries.
 
 The notebook pulls data from the John Hopkins [Data Repository](https://github.com/CSSEGISandData/COVID-19) of global Coronavirus COVID-19 cases, and then does the following things:
