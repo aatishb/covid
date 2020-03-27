@@ -316,25 +316,6 @@ for state in topusstates.index.values:
 ## Doubling Times for US COVID-19 Cases
 
 ```{python}
-topusstates = usstatesummary[usstatesummary[mostrecentdate] >= 100]
-print(topusstates)
-
-print('\n');
-inferreddoublingtime = []
-recentdoublingtime = []
-errors = []
-states = []
-
-for state in topusstates.index.values:
-    print('US state: ', state)
-    a = plotCases(uscases,'Province/State', state)
-    if a:
-        states.append(state)
-        inferreddoublingtime.append(a[0])
-        errors.append(a[1])
-        recentdoublingtime.append(a[2])
-    print('\n')
-
 d = {'States': states, 'Inferred Doubling Time': inferreddoublingtime, '95%CI': errors, 'Recent Doubling Time': recentdoublingtime}
 
 print('\nInferred Doubling Times are inferred using curve fits.') 
