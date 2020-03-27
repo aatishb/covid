@@ -1,0 +1,354 @@
+---
+title: "Covidtrends"
+author: "Aatish Bhatia"
+output: html_notebook
+---
+
+```{r setup}
+require(reticulate)
+use_virtualenv("py3-virtualenv")
+```
+
+# Tracking the Growth of COVID-19 Cases
+
+The purpose of this notebook is to infer the rate at which confirmed cases of COVID-19 are growing (or were growing) in various countries.
+
+**The notebook pulls data from the Johns Hopkins [Data Repository](https://github.com/CSSEGISandData/COVID-19) of global Coronavirus COVID-19 cases**, and then does the following things:
+
+- List cumulative number of confirmed cases (in countries with at least 100 confirmed cases)
+- Attempt to fit the time series of cumulative confirmed cases to both an exponential and a logistic function
+- Use these curve fits to infer doubling times (i.e., time for the number of cumulative confirmed cases to double)
+
+We then repeat these steps for US states.
+
+The notebook is updated approximately daily.
+
+For a great primer on exponential and logistic growth, watch [this video](https://www.youtube.com/watch?v=Kas0tIxDvrg).
+
+## Important Caveats:
+
+- The growth rate (and the doubling time) changes with time. As the exponential curve eventually turns into a logistic curve, the growth rate will shrink to zero (& the doubling time will consequently increase). **So it's not a good idea to extrapolate trends far into the future based on current growth rates or doubling times.**
+
+- The confirmed cases reported by each country are not the number of infections in each country, only those that have tested positive.
+
+- The doubling time calculated here measures the growth of cumulative confirmed cases, which is different from the growth of infections. For example, if a country suddenly ramps up testing, then the number of confirmed cases will rapidly rise, but infections may not be rising as the same rate.
+
+- The doubling times inferred from the curve fits are not necessarily the current or most recent doubling times: 
+    - For countries where the growth is still exponential, the inferred doubling time gives us a picture of the overall rate of growth. 
+    - For countries where the growth is no longer exponential, and the number of cases is stabilizing (such as China and South Korea), we use a logistic function to fit the data instead. Here, the inferred doubling time represents the growth encountered during the middle of the growth of the epidemic. 
+    - Finally, we compare these values to the recent doubling time, calculated from the most recent week of data.
+
+```{python}
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.optimize import curve_fit
+```
+
+```{python}
+df = pd.read_csv('https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv')
+```
+
+## Global COVID-19 Analysis
+
+```{python}
+cases = df.iloc[:,[1,-1]].groupby('Country/Region').sum()
+mostrecentdate = cases.columns[0]
+print('\nTotal number of cases (in countries with at least 100 cases) as of', mostrecentdate)
+
+cases = cases.sort_values(by = mostrecentdate, ascending = False)
+cases = cases[cases[mostrecentdate] >= 100]
+cases
+```
+
+## Curve Fitting Global COVID-19 Cases
+
+```{python}
+def logistic(t, a, b, c, d):
+    return c + (d - c)/(1 + a * np.exp(- b * t))
+
+def exponential(t, a, b, c):
+    return a * np.exp(b * t) + c
+
+def plotCases(dataframe, column, country):
+    
+    co = dataframe[dataframe[column] == country].iloc[:,4:].T.sum(axis = 1)
+    co = pd.DataFrame(co)
+    co.columns = ['Cases']
+    co = co.loc[co['Cases'] > 0]
+    
+    y = np.array(co['Cases'])
+    x = np.arange(y.size)
+    
+    recentdbltime = float('NaN')
+    
+    if len(y) >= 7:
+        
+        current = y[-1]
+        lastweek = y[-8]
+        
+        if current > lastweek:
+            print('\n** Based on Most Recent Week of Data **\n')
+            print('\tConfirmed cases on',co.index[-1],'\t',current)
+            print('\tConfirmed cases on',co.index[-8],'\t',lastweek)
+            ratio = current/lastweek
+            print('\tRatio:',round(ratio,2))
+            print('\tWeekly increase:',round( 100 * (ratio - 1), 1),'%')
+            dailypercentchange = round( 100 * (pow(ratio, 1/7) - 1), 1)
+            print('\tDaily increase:', dailypercentchange, '% per day')
+            recentdbltime = round( 7 * np.log(2) / np.log(ratio), 1)
+            print('\tDoubling Time (represents recent growth):',recentdbltime,'days')
+
+    plt.figure(figsize=(10,5))
+    plt.plot(x, y, 'ko', label="Original Data")
+    
+    logisticworked = False
+    exponentialworked = False
+    
+    try:
+        lpopt, lpcov = curve_fit(logistic, x, y, maxfev=10000)
+        lerror = np.sqrt(np.diag(lpcov))
+        
+        # for logistic curve at half maximum, slope = growth rate/2. so doubling time = ln(2) / (growth rate/2)
+        ldoubletime = np.log(2)/(lpopt[1]/2)
+        # standard error
+        ldoubletimeerror = 1.96 * ldoubletime * np.abs(lerror[1]/lpopt[1])
+        
+        # calculate R^2
+        residuals = y - logistic(x, *lpopt)
+        ss_res = np.sum(residuals**2)
+        ss_tot = np.sum((y - np.mean(y))**2)
+        logisticr2 = 1 - (ss_res / ss_tot)  
+        
+        if logisticr2 > 0.95:
+            plt.plot(x, logistic(x, *lpopt), 'b--', label="Logistic Curve Fit")
+            print('\n** Based on Logistic Fit**\n')
+            print('\tR^2:', logisticr2)
+            print('\tDoubling Time (during middle of growth): ', round(ldoubletime,2), '(±', round(ldoubletimeerror,2),') days')
+            logisticworked = True
+    
+    except:
+        pass
+    
+    try:
+        epopt, epcov = curve_fit(exponential, x, y, bounds=([0,0,-100],[100,0.9,100]), maxfev=10000)
+        eerror = np.sqrt(np.diag(epcov))
+        
+        # for exponential curve, slope = growth rate. so doubling time = ln(2) / growth rate
+        edoubletime = np.log(2)/epopt[1]
+        # standard error
+        edoubletimeerror = 1.96 * edoubletime * np.abs(eerror[1]/epopt[1])
+        
+        # calculate R^2
+        residuals = y - exponential(x, *epopt)
+        ss_res = np.sum(residuals**2)
+        ss_tot = np.sum((y - np.mean(y))**2)
+        expr2 = 1 - (ss_res / ss_tot)
+        
+        if expr2 > 0.95:
+            plt.plot(x, exponential(x, *epopt), 'r--', label="Exponential Curve Fit")
+            print('\n** Based on Exponential Fit **\n')
+            print('\tR^2:', expr2)
+            print('\tDoubling Time (represents overall growth): ', round(edoubletime,2), '(±', round(edoubletimeerror,2),') days')
+            exponentialworked = True
+            
+    except:
+        pass
+    
+    plt.title(country + ' Cumulative COVID-19 Cases. (Updated on '+mostrecentdate+')', fontsize="x-large")
+    plt.xlabel('Days', fontsize="x-large")
+    plt.ylabel('Total Cases', fontsize="x-large")
+    plt.legend(fontsize="x-large")
+    plt.show()
+    
+    if logisticworked and exponentialworked:
+        if round(logisticr2,2) > round(expr2,2):
+            return [ldoubletime, ldoubletimeerror, recentdbltime]
+        else:
+            return [edoubletime, edoubletimeerror, recentdbltime]
+            
+    if logisticworked:
+        return [ldoubletime, ldoubletimeerror, recentdbltime]
+    
+    if exponentialworked:
+        return [edoubletime, edoubletimeerror, recentdbltime]
+    
+    else:
+        return [float('NaN'), float('NaN'), recentdbltime]
+```
+
+```{python}
+topcountries = cases.index
+inferreddoublingtime = []
+recentdoublingtime = []
+errors = []
+countries = []
+print('\n')
+
+for c in topcountries:
+    print(c)
+    a = plotCases(df, 'Country/Region', c)
+    if a:
+        countries.append(c)
+        inferreddoublingtime.append(a[0])
+        errors.append(a[1])
+        recentdoublingtime.append(a[2])
+    print('\n')
+```
+
+## Doubling Times for Global COVID-19 Cases
+
+```{python}
+d = {'Countries': countries, 'Inferred Doubling Time': inferreddoublingtime, '95%CI': errors, 'Recent Doubling Time': recentdoublingtime}
+
+print('\nInferred Doubling Times are inferred using curve fits.') 
+print('Recent Doubling Times are calculated using the most recent week of data.')
+print('Shorter doubling time = faster growth, longer doubling time = slower growth.')
+print('\n')
+
+print(pd.DataFrame(data=d).iloc[:,[1,2,3]].round(1))    
+
+print('\n')
+dt = pd.DataFrame(data = d)
+dt = dt[dt['Inferred Doubling Time'] < 100]
+dt.plot.bar(x = 'Countries', y = 'Inferred Doubling Time', yerr='95%CI', legend=False,figsize=(15,7.5), fontsize="x-large", capsize=4);
+plt.axhline(y=1, linestyle='--')
+plt.axhline(y=3, linestyle='--')
+plt.axhline(y=5, linestyle='--')
+plt.ylabel('Doubling Time (Days)', fontsize="x-large")
+plt.xlabel('Countries', fontsize="x-large")
+plt.title('Inferred Doubling Time of Cumulative COVID-19 Cases. Last update: ' + mostrecentdate, fontsize="x-large")
+plt.show()
+
+print('\n')
+dt = pd.DataFrame(data = d)
+dt = dt[dt['Inferred Doubling Time'] < 10]
+dt.plot.bar(x = 'Countries', y = 'Inferred Doubling Time', yerr='95%CI', legend=False,figsize=(15,7.5), fontsize="x-large", capsize=4);
+plt.ylabel('Doubling Time (Days)', fontsize="x-large")
+plt.xlabel('Countries', fontsize="x-large")
+plt.axhline(y=1, linestyle='--')
+plt.axhline(y=3, linestyle='--')
+plt.axhline(y=5, linestyle='--')
+plt.title('Inferred Doubling Time of Cumulative COVID-19 Cases. Last update: ' + mostrecentdate, fontsize="x-large")
+plt.show()
+
+err = pd.DataFrame([errors,[float('NaN') for e in errors]]).T
+err.index=countries
+err.columns = ['Inferred Doubling Time', 'Recent Doubling Time']
+
+print('\n')
+dt = pd.DataFrame({'Inferred Doubling Time': inferreddoublingtime,'Recent Doubling Time': recentdoublingtime}, index=countries)
+dt = dt[dt['Recent Doubling Time'] < 100]
+dt.plot.bar(figsize=(15,7.5), fontsize="x-large", yerr=err, capsize=4)
+plt.ylabel('Doubling Time (Days)', fontsize="x-large")
+plt.xlabel('Countries', fontsize="x-large")
+plt.axhline(y=1, linestyle='--')
+plt.axhline(y=3, linestyle='--')
+plt.axhline(y=5, linestyle='--')
+plt.title('Doubling Time of Cumulative COVID-19 Cases. Last update: ' + mostrecentdate, fontsize="x-large")
+plt.show()
+
+print('\n')
+dt = pd.DataFrame({'Inferred Doubling Time': inferreddoublingtime,'Recent Doubling Time': recentdoublingtime}, index=countries)
+dt = dt[dt['Recent Doubling Time'] < 10]
+dt.plot.bar(figsize=(15,7.5), fontsize="x-large", yerr=err, capsize=4)
+plt.ylabel('Doubling Time (Days)', fontsize="x-large")
+plt.xlabel('Countries', fontsize="x-large")
+plt.axhline(y=1, linestyle='--')
+plt.axhline(y=3, linestyle='--')
+plt.axhline(y=5, linestyle='--')
+plt.title('Doubling Time of Cumulative COVID-19 Cases. Last update: ' + mostrecentdate, fontsize="x-large")
+plt.show()
+```
+
+## US COVID-19 Analysis
+
+```{python}
+uscases = df[df['Country/Region'] == 'US'].copy()
+
+# US states lookup from https://code.activestate.com/recipes/577305-python-dictionary-of-us-states-and-territories/
+# with DC added
+states = { 'AK': 'Alaska', 'AL': 'Alabama', 'AR': 'Arkansas', 'AS': 'American Samoa', 'AZ': 'Arizona', 'CA': 'California', 'CO': 'Colorado', 'CT': 'Connecticut', 'DC': 'District of Columbia', 'DE': 'Delaware', 'FL': 'Florida', 'GA': 'Georgia', 'GU': 'Guam', 'HI': 'Hawaii', 'IA': 'Iowa', 'ID': 'Idaho', 'IL': 'Illinois', 'IN': 'Indiana', 'KS': 'Kansas', 'KY': 'Kentucky', 'LA': 'Louisiana', 'MA': 'Massachusetts', 'MD': 'Maryland', 'ME': 'Maine', 'MI': 'Michigan', 'MN': 'Minnesota', 'MO': 'Missouri', 'MP': 'Northern Mariana Islands', 'MS': 'Mississippi', 'MT': 'Montana', 'NA': 'National', 'NC': 'North Carolina', 'ND': 'North Dakota', 'NE': 'Nebraska', 'NH': 'New Hampshire', 'NJ': 'New Jersey', 'NM': 'New Mexico', 'NV': 'Nevada', 'NY': 'New York', 'OH': 'Ohio', 'OK': 'Oklahoma', 'OR': 'Oregon', 'PA': 'Pennsylvania', 'PR': 'Puerto Rico', 'RI': 'Rhode Island', 'SC': 'South Carolina', 'SD': 'South Dakota', 'TN': 'Tennessee', 'TX': 'Texas', 'UT': 'Utah', 'VA': 'Virginia', 'VI': 'Virgin Islands', 'VT': 'Vermont', 'WA': 'Washington', 'WI': 'Wisconsin', 'WV': 'West Virginia', 'WY': 'Wyoming', 'D.C.': 'District of Columbia'}
+
+for index, row in uscases.iterrows():
+    location = row['Province/State']
+    try:
+        if ',' in location:
+            result = [x.strip() for x in location.split(',')]
+            statename = states[result[1]]
+            row['State'] = statename
+            uscases.loc[index, 'Province/State'] = statename
+    except:
+        print('Error parsing US state:', location)        
+            
+usstatesummary = uscases.iloc[:,[0,-1]].groupby('Province/State').sum()
+mostrecentdate = usstatesummary.columns[0]
+usstatesummary = usstatesummary.sort_values(by = mostrecentdate, ascending = False)
+usstatesummary = usstatesummary[usstatesummary[mostrecentdate] > 0]
+
+print('\nNumber of confirmed US COVID-19 cases by state as of', mostrecentdate)
+usstatesummary
+```
+
+## Curve Fitting US COVID-19 Cases
+
+```{python}
+topusstates = usstatesummary[usstatesummary[mostrecentdate] >= 100]
+print(topusstates)
+
+print('\n');
+inferreddoublingtime = []
+recentdoublingtime = []
+errors = []
+states = []
+
+for state in topusstates.index.values:
+    print('US state: ', state)
+    a = plotCases(uscases,'Province/State', state)
+    if a:
+        states.append(state)
+        inferreddoublingtime.append(a[0])
+        errors.append(a[1])
+        recentdoublingtime.append(a[2])
+    print('\n')
+```
+
+## Doubling Times for US COVID-19 Cases
+
+```{python}
+d = {'States': states, 'Inferred Doubling Time': inferreddoublingtime, '95%CI': errors, 'Recent Doubling Time': recentdoublingtime}
+
+print('\nInferred Doubling Times are inferred using curve fits.') 
+print('Recent Doubling Times are calculated using the most recent week of data.')
+print('Shorter doubling time = faster growth, longer doubling time = slower growth.')
+print('\n')
+print(pd.DataFrame(data=d).iloc[:,[3,1,2]].round(1))    
+
+print('\n')
+dt = pd.DataFrame(data = d)
+dt = dt[dt['Inferred Doubling Time'] < 100]
+dt.plot.bar(x = 'States', y = 'Inferred Doubling Time', yerr='95%CI', legend=False,figsize=(10,5), fontsize="x-large");
+plt.axhline(y=1, linestyle='--')
+plt.axhline(y=3, linestyle='--')
+plt.axhline(y=5, linestyle='--')
+plt.ylabel('Inferred Doubling Time (Days)', fontsize="x-large")
+plt.xlabel('US States', fontsize="x-large")
+plt.title('Inferred Doubling Time of Cumulative COVID-19 Cases in US States. Last update: ' + mostrecentdate, fontsize="x-large")
+plt.show()
+
+err = pd.DataFrame([errors,[float('NaN') for e in errors]]).T
+err.index=states
+err.columns = ['Inferred Doubling Time', 'Recent Doubling Time']
+
+print('\n')
+dt = pd.DataFrame({'Inferred Doubling Time': inferreddoublingtime,'Recent Doubling Time': recentdoublingtime}, index=states)
+dt = dt[dt['Recent Doubling Time'] < 100]
+dt.plot.bar(yerr=err, figsize=(10,5), fontsize="x-large")
+plt.ylabel('Doubling Time (Days)', fontsize="x-large")
+plt.xlabel('US States', fontsize="x-large")
+plt.axhline(y=1, linestyle='--')
+plt.axhline(y=3, linestyle='--')
+plt.axhline(y=5, linestyle='--')
+plt.title('Doubling Time of Cumulative COVID-19 Cases in US States. Last update: ' + mostrecentdate, fontsize="x-large")
+plt.show()
+```
