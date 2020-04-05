@@ -4,7 +4,7 @@
 
 The purpose of [this notebook](https://github.com/aatishb/covid/blob/master/curvefit.ipynb) is to infer the rate at which confirmed cases of COVID-19 are growing (or were growing) in various countries.
 
-The notebook pulls data from the John Hopkins [Data Repository](https://github.com/CSSEGISandData/COVID-19) of global Coronavirus COVID-19 cases, and then does the following things:
+The notebook pulls data from the Johns Hopkins [Data Repository](https://github.com/CSSEGISandData/COVID-19) of global Coronavirus COVID-19 cases, and then does the following things:
 
 - List total number of confirmed cases (in countries with at least 100 cases)
 - Attempt to fit the time series of confirmed cases in these countries to both an exponential and a logistic function
